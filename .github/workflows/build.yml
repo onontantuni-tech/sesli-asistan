@@ -1,0 +1,43 @@
+name: Harun APK Derle
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: APK derle
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: APK adını düzelt
+        run: cp app/build/outputs/apk/debug/app-debug.apk Harun.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Harun-apk
+          path: Harun.apk
+
+      - name: Telefondan indirilebilsin diye Release'e koy
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Harun v1.0.${{ github.run_number }}
+          body: "Telefonundan **Harun.apk** dosyasına dokunup indir ve kur."
+          files: Harun.apk
+          make_latest: true
