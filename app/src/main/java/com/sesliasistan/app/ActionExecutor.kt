@@ -12,6 +12,7 @@ import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.provider.AlarmClock
+import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Settings
@@ -46,6 +47,7 @@ class ActionExecutor(private val activity: Activity, private val prefs: Prefs) {
                 "timer" -> timer(a)
                 "flashlight" -> flashlight(a.optBoolean("on", true))
                 "volume" -> volume(a.optString("direction"))
+                "last_call" -> lastCall()
                 "camera" -> start(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA))
                 "settings" -> settings(a.optString("page"))
                 else -> ActionResult()
@@ -86,11 +88,43 @@ class ActionExecutor(private val activity: Activity, private val prefs: Prefs) {
         }
     }
 
+    private fun lastCall(): ActionResult {
+        if (!has(Manifest.permission.READ_CALL_LOG)) {
+            activity.requestPermissions(arrayOf(Manifest.permission.READ_CALL_LOG), 2)
+            start(Intent(Intent.ACTION_VIEW).setType(CallLog.Calls.CONTENT_TYPE))
+            return ActionResult("Son aramaları açtım. Kendim arayabilmem için arama kaydı iznini vermen gerekiyor.")
+        }
+        var number: String? = null
+        ctx.contentResolver.query(
+            CallLog.Calls.CONTENT_URI,
+            arrayOf(CallLog.Calls.NUMBER, CallLog.Calls.TYPE),
+            null, null, CallLog.Calls.DATE + " DESC"
+        )?.use { c ->
+            while (c.moveToNext()) {
+                val type = c.getInt(1)
+                if (type == CallLog.Calls.INCOMING_TYPE || type == CallLog.Calls.MISSED_TYPE) {
+                    number = c.getString(0)
+                    break
+                }
+            }
+        }
+        val n = number
+        if (n.isNullOrBlank()) return ActionResult("Arama geçmişinde gelen bir arama bulamadım.")
+        return call(JSONObject().put("number", n))
+    }
+
     private fun sms(a: JSONObject): ActionResult {
         val (number, display) = resolveNumber(a) ?: return contactMissing(a)
         val msg = a.optString("message")
         if (msg.isBlank()) {
             return start(Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$number")))
+        }
+        if (!has(Manifest.permission.SEND_SMS)) {
+            // Android kısıtladığı için mesaj uygulamasını metin hazır şekilde aç
+            val i = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$number"))
+            i.putExtra("sms_body", msg)
+            start(i)
+            return ActionResult("Mesajı hazırladım, göndermek için gönder tuşuna basman yeterli.")
         }
         val resolved = JSONObject().put("type", "sms_send").put("number", number)
             .put("display", display).put("message", msg)

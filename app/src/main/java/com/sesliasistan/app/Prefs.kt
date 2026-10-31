@@ -35,6 +35,6 @@ class Prefs(context: Context) {
 
     companion object {
         // "latest" takma adı Google yeni model çıkardıkça otomatik güncellenir
-        const val DEFAULT_MODEL = "gemini-flash-latest"
+        const val DEFAULT_MODEL = "gemini-flash-lite-latest"
     }
 }

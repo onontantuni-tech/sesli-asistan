@@ -161,8 +161,7 @@ class MainActivity : Activity() {
         val list = arrayListOf(
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.READ_CONTACTS,
-            Manifest.permission.CALL_PHONE,
-            Manifest.permission.SEND_SMS
+            Manifest.permission.CALL_PHONE
         )
         if (Build.VERSION.SDK_INT >= 33) list.add(Manifest.permission.POST_NOTIFICATIONS)
         val wanted = list.filter { !has(it) }
@@ -304,6 +303,10 @@ class MainActivity : Activity() {
             return
         }
 
+        if (busy) {
+            status.text = "Bir saniye, önceki isteğini bitiriyorum…"
+            return
+        }
         busy = true
         status.text = "Düşünüyorum…"
         Thread {

@@ -52,6 +52,7 @@ Kullanabileceğin eylemler:
 {"type":"timer","seconds":600,"label":"etiket"}
 {"type":"flashlight","on":true}
 {"type":"volume","direction":"up"}   up / down / mute / max
+{"type":"last_call"}                 en son arayan kişiyi geri ara / son aramayı tekrarla
 {"type":"camera"}
 {"type":"settings","page":"wifi"}    wifi / bluetooth / display / sound / battery / location / general
 
@@ -86,13 +87,16 @@ Kurallar:
 
         // Seçili model yoğunsa sırayla yedek modelleri dene
         val models = LinkedHashSet<String>()
-        models.add(prefs.model)
+        // Eski varsayılan (yavaş/yoğun) model kayıtlıysa hızlı modellerle başla
+        if (prefs.model != "gemini-flash-latest") models.add(prefs.model)
         models.addAll(FALLBACK_MODELS)
+        val deadline = System.currentTimeMillis() + 40000
         val payload = body.toString().toByteArray(Charsets.UTF_8)
         var lastCode = 0
         var lastMsg = ""
         try {
             for (m in models) {
+                if (System.currentTimeMillis() > deadline) break
                 for (attempt in 0 until 2) {
                     val (code, text) = post(m, key, payload)
                     if (code in 200..299) {
@@ -108,7 +112,8 @@ Kurallar:
                     // Anahtar hatalıysa diğer modelleri denemenin anlamı yok
                     if (code == 400 || code == 401 || code == 403) throw RuntimeException(friendly(code, lastMsg))
                     // Yoğunluk / geçici hata ise kısa bekleyip bir kez daha dene
-                    if (code == 429 || code >= 500) { Thread.sleep(1200L); continue }
+                    if (code == -1) break // zaman aşımı: beklemeden sonraki modele geç
+                    if ((code == 429 || code >= 500) && attempt == 0) { Thread.sleep(1200L); continue }
                     break // 404 vb. -> sonraki model
                 }
             }
@@ -127,7 +132,7 @@ Kurallar:
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 15000
-            readTimeout = 60000
+            readTimeout = 20000
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             setRequestProperty("x-goog-api-key", key)
@@ -138,12 +143,16 @@ Kurallar:
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
             return Pair(code, text)
+        } catch (e: java.net.SocketTimeoutException) {
+            return Pair(-1, "timeout")
         } finally {
             conn.disconnect()
         }
     }
 
     private fun friendly(code: Int, msg: String): String = when {
+        code == -1 ->
+            "Google'dan zamanında cevap gelmedi. İnternetini kontrol edip tekrar dener misin?"
         code == 429 && msg.contains("quota", true) ->
             "Bugünkü ücretsiz kullanım hakkın dolmuş olabilir. Biraz sonra tekrar dene."
         code == 429 || code >= 500 ->
@@ -157,9 +166,9 @@ Kurallar:
 
     companion object {
         private val FALLBACK_MODELS = listOf(
-            "gemini-flash-latest",
             "gemini-flash-lite-latest",
             "gemini-3.5-flash-lite",
+            "gemini-flash-latest",
             "gemini-2.5-flash"
         )
     }
