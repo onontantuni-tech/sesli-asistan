@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -49,6 +50,7 @@ class WakeService : Service() {
         ui.removeCallbacksAndMessages(null)
         recognizer?.destroy()
         recognizer = null
+        unmute()
         super.onDestroy()
     }
 
@@ -58,6 +60,7 @@ class WakeService : Service() {
         active = false
         ui.removeCallbacksAndMessages(null)
         recognizer?.cancel()
+        ui.postDelayed({ unmute() }, 300)
     }
 
     fun resume() {
@@ -83,16 +86,18 @@ class WakeService : Service() {
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
         }
+        mute()
         active = true
         recognizer?.startListening(i)
     }
 
     private val listener = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) {}
+        // Başlangıç bip'i geçince sesi geri aç, bitişte tekrar kıs
+        override fun onReadyForSpeech(params: Bundle?) { ui.postDelayed({ if (active) unmute() }, 600) }
         override fun onBeginningOfSpeech() {}
         override fun onRmsChanged(rmsdB: Float) {}
         override fun onBufferReceived(buffer: ByteArray?) {}
-        override fun onEndOfSpeech() {}
+        override fun onEndOfSpeech() { mute() }
         override fun onPartialResults(partialResults: Bundle?) {}
         override fun onEvent(eventType: Int, params: Bundle?) {}
 
@@ -141,7 +146,36 @@ class WakeService : Service() {
         return false
     }
 
+    // ---- Ses tanımanın "bip" sesini sustur ----
+    private var muted = ArrayList<Int>()
+
+    private fun mute() {
+        if (muted.isNotEmpty()) return
+        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val streams = arrayListOf(AudioManager.STREAM_SYSTEM, AudioManager.STREAM_NOTIFICATION)
+        // Müzik/video çalıyorsa onu kesme
+        if (!am.isMusicActive) streams.add(AudioManager.STREAM_MUSIC)
+        for (st in streams) {
+            try {
+                if (!am.isStreamMute(st)) {
+                    am.adjustStreamVolume(st, AudioManager.ADJUST_MUTE, 0)
+                    muted.add(st)
+                }
+            } catch (e: Exception) { }
+        }
+    }
+
+    private fun unmute() {
+        if (muted.isEmpty()) return
+        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        for (st in muted) {
+            try { am.adjustStreamVolume(st, AudioManager.ADJUST_UNMUTE, 0) } catch (e: Exception) { }
+        }
+        muted.clear()
+    }
+
     private fun wakeUp(command: String) {
+        unmute()
         val i = Intent(this, MainActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             putExtra(MainActivity.EXTRA_WAKE, true)

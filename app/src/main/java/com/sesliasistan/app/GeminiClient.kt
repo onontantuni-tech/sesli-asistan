@@ -84,8 +84,46 @@ Kurallar:
                 .put("temperature", 0.6)
                 .put("responseMimeType", "application/json"))
 
-        val model = URLEncoder.encode(prefs.model, "UTF-8")
-        val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent")
+        // Seçili model yoğunsa sırayla yedek modelleri dene
+        val models = LinkedHashSet<String>()
+        models.add(prefs.model)
+        models.addAll(FALLBACK_MODELS)
+        val payload = body.toString().toByteArray(Charsets.UTF_8)
+        var lastCode = 0
+        var lastMsg = ""
+        try {
+            for (m in models) {
+                for (attempt in 0 until 2) {
+                    val (code, text) = post(m, key, payload)
+                    if (code in 200..299) {
+                        val reply = parse(text)
+                        history.add(JSONObject().put("role", "model")
+                            .put("parts", JSONArray().put(JSONObject().put("text", reply.speech))))
+                        return reply
+                    }
+                    lastCode = code
+                    lastMsg = try {
+                        JSONObject(text).getJSONObject("error").optString("message")
+                    } catch (e: Exception) { text.take(200) }
+                    // Anahtar hatalıysa diğer modelleri denemenin anlamı yok
+                    if (code == 400 || code == 401 || code == 403) throw RuntimeException(friendly(code, lastMsg))
+                    // Yoğunluk / geçici hata ise kısa bekleyip bir kez daha dene
+                    if (code == 429 || code >= 500) { Thread.sleep(1200L); continue }
+                    break // 404 vb. -> sonraki model
+                }
+            }
+            throw RuntimeException(friendly(lastCode, lastMsg))
+        } catch (e: Exception) {
+            if (history.isNotEmpty() && history[history.size - 1].optString("role") == "user") {
+                history.removeAt(history.size - 1)
+            }
+            throw e
+        }
+    }
+
+    private fun post(model: String, key: String, payload: ByteArray): Pair<Int, String> {
+        val m = URLEncoder.encode(model, "UTF-8")
+        val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent")
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 15000
@@ -95,24 +133,35 @@ Kurallar:
             setRequestProperty("x-goog-api-key", key)
         }
         try {
-            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            conn.outputStream.use { it.write(payload) }
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
-            if (code !in 200..299) {
-                history.removeAt(history.size - 1)
-                val msg = try {
-                    JSONObject(text).getJSONObject("error").optString("message")
-                } catch (e: Exception) { text.take(200) }
-                throw RuntimeException("Gemini hatası ($code): $msg")
-            }
-            val reply = parse(text)
-            history.add(JSONObject().put("role", "model")
-                .put("parts", JSONArray().put(JSONObject().put("text", reply.speech))))
-            return reply
+            return Pair(code, text)
         } finally {
             conn.disconnect()
         }
+    }
+
+    private fun friendly(code: Int, msg: String): String = when {
+        code == 429 && msg.contains("quota", true) ->
+            "Bugünkü ücretsiz kullanım hakkın dolmuş olabilir. Biraz sonra tekrar dene."
+        code == 429 || code >= 500 ->
+            "Google'ın sunucuları şu an çok yoğun. Birkaç saniye sonra tekrar dener misin?"
+        code == 400 && msg.contains("API key", true) ->
+            "Gemini API anahtarı geçersiz görünüyor. Ayarlar'dan kontrol eder misin?"
+        code == 401 || code == 403 ->
+            "Gemini API anahtarı kabul edilmedi. Ayarlar'dan kontrol eder misin?"
+        else -> "Gemini hatası ($code): $msg"
+    }
+
+    companion object {
+        private val FALLBACK_MODELS = listOf(
+            "gemini-flash-latest",
+            "gemini-flash-lite-latest",
+            "gemini-3.5-flash-lite",
+            "gemini-2.5-flash"
+        )
     }
 
     private fun parse(raw: String): AssistantReply {
